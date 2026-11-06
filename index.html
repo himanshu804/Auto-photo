@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Auto Photos</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:#101114;color:#f5f5f5;padding:18px;max-width:720px;margin-inline:auto}
+h1{font-size:28px;margin:8px 0 4px}p{color:#b9bbc2;line-height:1.45}
+video{width:100%;aspect-ratio:4/3;object-fit:cover;background:#252830;border-radius:18px;margin:14px 0}
+.panel{background:#1b1d23;border:1px solid #30333c;border-radius:16px;padding:14px;margin:12px 0}
+label{display:block;font-size:14px;color:#c7c9d0;margin-bottom:7px}
+select,button{font:inherit;border-radius:12px;padding:13px;width:100%;border:1px solid #444853;background:#252832;color:white}
+button{border:0;background:#f2f2f2;color:#111;font-weight:700;margin-top:10px}
+button.secondary{background:#30343e;color:white;border:1px solid #4a4f5b}
+button:disabled{opacity:.4}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stats{display:flex;justify-content:space-between;gap:10px;font-variant-numeric:tabular-nums}
+#status{color:#c9d4ff}small{color:#aeb1ba}
+</style>
+</head>
+<body>
+<h1>Auto Photos</h1>
+<p>Mount your iQOO on a tripod, allow camera access, and capture one photo every 2 seconds.</p>
+<video id="preview" autoplay playsinline muted></video>
+<div class="panel">
+  <label for="camera">Camera</label>
+  <select id="camera"><option value="environment">Back camera</option><option value="user">Front camera</option></select>
+  <div class="row" style="margin-top:12px">
+    <div><label for="interval">Capture interval</label><select id="interval"><option value="2000">Every 2 seconds</option></select></div>
+    <div><label for="quality">Photo quality</label><select id="quality"><option value="0.92">High</option><option value="0.82">Balanced</option></select></div>
+  </div>
+  <div class="row">
+    <button id="start">Start camera</button>
+    <button id="begin" disabled>Start auto photos</button>
+  </div>
+  <div class="row">
+    <button id="stop" class="secondary" disabled>Stop &amp; save</button>
+    <button id="clear" class="secondary" disabled>Clear photos</button>
+  </div>
+</div>
+<div class="panel">
+  <div class="stats"><span>Photos captured</span><strong id="count">0</strong></div>
+  <p id="status">Camera is off.</p>
+  <small>Photos stay in this page while capturing. When you stop, they are bundled into one ZIP file named Auto Photos, which you can extract into an Auto Photos folder.</small>
+</div>
+<canvas id="canvas" hidden></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const video=document.querySelector('#preview'), camera=document.querySelector('#camera');
+const startBtn=document.querySelector('#start'), beginBtn=document.querySelector('#begin');
+const stopBtn=document.querySelector('#stop'), clearBtn=document.querySelector('#clear');
+const countEl=document.querySelector('#count'), statusEl=document.querySelector('#status');
+const canvas=document.querySelector('#canvas'), ctx=canvas.getContext('2d');
+let stream=null, timer=null, photos=[], wakeLock=null, busy=false;
+function status(s){statusEl.textContent=s}
+async function startCamera(){
+  try{
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:camera.value},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    video.srcObject=stream; await video.play();
+    beginBtn.disabled=false; status('Camera ready. Tap “Start auto photos”.');
+  }catch(e){status('Could not open camera: '+e.message+'. Use Chrome and allow camera permission.')}
+}
+async function capture(){
+  if(busy || !video.videoWidth) return;
+  busy=true;
+  try{
+    canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',Number(document.querySelector('#quality').value)));
+    if(blob){photos.push({blob,name:'photo_'+String(photos.length+1).padStart(4,'0')+'.jpg'});countEl.textContent=photos.length;}
+  }finally{busy=false;}
+}
+async function begin(){
+  if(!stream) return;
+  photos=[];countEl.textContent='0';
+  beginBtn.disabled=true;startBtn.disabled=true;stopBtn.disabled=false;clearBtn.disabled=true;
+  try{if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen')}catch(e){}
+  await capture();
+  timer=setInterval(capture,Number(document.querySelector('#interval').value));
+  status('Capturing every 2 seconds. Keep this page open and the screen on.');
+}
+async function stop(){
+  if(timer){clearInterval(timer);timer=null}
+  beginBtn.disabled=!stream;startBtn.disabled=false;stopBtn.disabled=true;clearBtn.disabled=photos.length===0;
+  if(wakeLock){try{await wakeLock.release()}catch(e){}wakeLock=null}
+  if(!photos.length){status('Stopped. No photos were captured.');return}
+  status('Preparing '+photos.length+' photos…');
+  try{
+    if(typeof JSZip==='undefined') throw new Error('ZIP library did not load. Check your internet connection and try again.');
+    const zip=new JSZip();const folder=zip.folder('Auto Photos');
+    photos.forEach(p=>folder.file(p.name,p.blob));
+    const blob=await zip.generateAsync({type:'blob'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='Auto_Photos.zip';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    status('Saved '+photos.length+' photos in Auto_Photos.zip. Open Downloads and extract it to get the Auto Photos folder.');
+  }catch(e){status('Could not create ZIP: '+e.message)}
+}
+startBtn.addEventListener('click',startCamera);
+beginBtn.addEventListener('click',begin);
+stopBtn.addEventListener('click',stop);
+clearBtn.addEventListener('click',()=>{photos=[];countEl.textContent='0';clearBtn.disabled=true;status('Photos cleared from this page.')});
+camera.addEventListener('change',()=>{if(stream)startCamera()});
+window.addEventListener('pagehide',()=>{if(timer)clearInterval(timer);if(stream)stream.getTracks().forEach(t=>t.stop())});
+</script>
+</body>
+</html>
